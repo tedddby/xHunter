@@ -87,6 +87,48 @@ Return ONLY this JSON shape (omit fields that don't apply; omit a whole section 
   ]
 }`;
 
+const STAGE3_SYSTEM = `You are an expert career coach and cover-letter writer. Write a tailored, professional cover letter for the candidate based on their CV and the job description. Return it as STRUCTURED JSON ONLY — no markdown, no commentary, no preamble.
+
+Rules:
+- Ground every claim in the candidate's real CV — never invent experience, employers, skills, or metrics.
+- Address the specific role and company; mirror the job's key requirements and language naturally.
+- Open with a strong hook, demonstrate fit in the body with concrete evidence drawn from the CV, and close with a confident call to action.
+- Provide exactly 3 to 4 body paragraphs, professional but warm. No clichés, no filler, no repeating the CV verbatim. Keep it to one page.
+- Use the candidate's real name and contact details from the CV. Split their name into first_name and last_name.
+- NEVER fabricate facts you don't have. Leave a field as an empty string "" when the information isn't present:
+  - sender fields come only from the CV (address/location are often missing — that's fine, leave them "").
+  - recipient.company comes from the job description only if stated; recipient.contact/address/location only if explicitly given. Do NOT invent a hiring manager's name or a mailing address.
+- greeting: address the named contact if the job description gives one, otherwise "Dear Hiring Manager,".
+- subject: a short line naming the role being applied for (this becomes the "RE:" line).
+- closing_line: a single confident call-to-action sentence placed just before the signature.
+
+Return ONLY this JSON shape (use "" for any field you don't have — never fabricate):
+{
+  "first_name": "Jane",
+  "last_name": "Smith",
+  "sender": {
+    "address": "123 Main Street",
+    "location": "City, State ZIP",
+    "phone": "+1 555 555 5555",
+    "email": "jane@example.com"
+  },
+  "recipient": {
+    "company": "Acme Corp",
+    "contact": "Ms. Doe, Hiring Manager",
+    "address": "456 Market Street",
+    "location": "City, State ZIP"
+  },
+  "subject": "Application for the Senior Backend Engineer position",
+  "greeting": "Dear Hiring Manager,",
+  "paragraphs": [
+    "Opening paragraph naming the role and a compelling reason you're a strong fit.",
+    "Body paragraph with concrete evidence from your experience mapped to the role's needs.",
+    "Closing paragraph conveying enthusiasm for the company and the role."
+  ],
+  "closing_line": "I would welcome the chance to discuss how I can contribute to your team.",
+  "signoff": "Sincerely,"
+}`;
+
 function buildUserMessage(jobDescription, cvText, instruction) {
   return `JOB DESCRIPTION:\n${jobDescription}\n\nMY CV:\n${cvText}\n\n${instruction}`;
 }
@@ -224,6 +266,38 @@ function normalizeResume(obj) {
   };
 }
 
+function asObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function normalizeCoverLetter(obj) {
+  const o = asObject(obj);
+  const sender = asObject(o.sender);
+  const recipient = asObject(o.recipient);
+  return {
+    first_name: asString(o.first_name),
+    last_name: asString(o.last_name),
+    name: asString(o.name), // fallback when first/last aren't split out
+    sender: {
+      address: asString(sender.address),
+      location: asString(sender.location),
+      phone: asString(sender.phone),
+      email: asString(sender.email)
+    },
+    recipient: {
+      company: asString(recipient.company),
+      contact: asString(recipient.contact),
+      address: asString(recipient.address),
+      location: asString(recipient.location)
+    },
+    subject: asString(o.subject),
+    greeting: asString(o.greeting),
+    paragraphs: asStringArray(o.paragraphs),
+    closing_line: asString(o.closing_line),
+    signoff: asString(o.signoff) || 'Sincerely,'
+  };
+}
+
 // HTTP header values must be ISO-8859-1; DeepSeek keys are plain ASCII. Strip
 // any other characters (zero-width spaces, curly quotes, BOM, stray unicode
 // from copy-paste) that would otherwise crash fetch() when building the header.
@@ -324,6 +398,50 @@ async function handleTailor({ cv, jd }) {
   }
 }
 
+async function handleCoverLetter({ cv, jd }) {
+  await storageSet({ job_status: 'cover_lettering', last_error: '' });
+
+  const apiKey = await getApiKey();
+  if (!apiKey) {
+    await storageSet({ job_status: 'idle', last_error: 'NO_KEY' });
+    return { ok: false, error: 'NO_KEY' };
+  }
+
+  try {
+    const content = await callDeepSeek(apiKey, {
+      model: MODEL,
+      // A touch warmer than analysis/tailoring for a natural letter voice,
+      // still low enough to keep it grounded in the CV.
+      temperature: 0.5,
+      max_tokens: 2000,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: STAGE3_SYSTEM },
+        {
+          role: 'user',
+          content: buildUserMessage(jd, cv, 'Please write a tailored cover letter for this job.')
+        }
+      ]
+    });
+
+    let letter;
+    try {
+      letter = normalizeCoverLetter(parseJSONLoose(content));
+      if (!letter.paragraphs.length) throw new Error('empty');
+    } catch (e) {
+      await storageSet({ job_status: 'idle', last_error: 'PARSE_LETTER' });
+      return { ok: false, error: 'PARSE_LETTER' };
+    }
+
+    await storageSet({ job_status: 'idle', last_cover_letter: letter, last_error: '' });
+    return { ok: true, cover_letter: letter };
+  } catch (e) {
+    const error = e && e.message ? e.message : String(e);
+    await storageSet({ job_status: 'idle', last_error: error });
+    return { ok: false, error };
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || !message.type) return false;
 
@@ -334,6 +452,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === 'TAILOR') {
     handleTailor(message).then(sendResponse);
+    return true; // async response
+  }
+
+  if (message.type === 'COVER_LETTER') {
+    handleCoverLetter(message).then(sendResponse);
     return true; // async response
   }
 

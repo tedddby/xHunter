@@ -1,6 +1,6 @@
 # xHunter
 
-> Hunt the right job. A Chrome extension that scores your CV against any job posting, rewrites it to fit, and exports a clean, ATS-friendly PDF — all running locally in your browser.
+> Hunt the right job. A Chrome extension that scores your CV against any job posting, rewrites it to fit, writes a matching cover letter, and exports clean PDFs — all running locally in your browser.
 
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-635bff)
 ![No backend](https://img.shields.io/badge/backend-none-1a8754)
@@ -19,16 +19,24 @@ One CV is never enough. Every posting wants different keywords in a different or
       <sub><b>Paste or upload your CV, then Analyze</b></sub>
     </td>
     <td align="center" width="50%">
-      <img src="Screenshots/2.png" alt="Match report — score, strengths and gaps" width="100%"><br>
-      <sub><b>Match score, strengths, gaps &amp; keywords</b></sub>
+      <img src="Screenshots/2.png" alt="Match report — score, strengths, gaps, and the Tailor / Write Cover Letter actions" width="100%"><br>
+      <sub><b>Match score, strengths &amp; gaps — then Tailor My CV or Write Cover Letter</b></sub>
     </td>
   </tr>
 </table>
 
-<p align="center">
-  <img src="Screenshots/3.png" alt="Exported ATS-friendly tailored CV PDF" width="430"><br>
-  <sub><b>The tailored CV, exported as a clean ATS-friendly PDF</b></sub>
-</p>
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="Screenshots/3.png" alt="Exported ATS-friendly tailored CV PDF" width="100%"><br>
+      <sub><b>The tailored CV, exported as a clean ATS-friendly PDF</b></sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="Screenshots/4.png" alt="Exported cover-letter PDF in the styled letter template" width="100%"><br>
+      <sub><b>The matching cover letter, exported as a styled PDF</b></sub>
+    </td>
+  </tr>
+</table>
 
 ---
 
@@ -36,6 +44,7 @@ One CV is never enough. Every posting wants different keywords in a different or
 
 - **Match analysis** — a match score, your strengths, the gaps, and keywords to add (click any keyword to copy it).
 - **One-click tailoring** — rewrites your CV in the posting's language. Facts, dates, and companies stay 100% accurate; nothing is fabricated.
+- **Cover letters** — generates a tailored, one-page cover letter grounded in your real CV, exported as a styled PDF (surname-first header, accent rule, RE: line, signature). Nothing is invented — unknown details (recipient name/address) are simply left out.
 - **Professional PDF export** — a clean, ATS-parsable résumé layout (centered header, ruled sections, bullets) generated with jsPDF.
 - **Paste or upload** — paste plain text, or drop a **PDF / DOCX** and it extracts the text for you.
 - **Private by design** — your CV and API key live in `chrome.storage.local`. The only network calls go to `api.deepseek.com`, and only when you click Analyze/Tailor.
@@ -68,8 +77,8 @@ Get a key at [platform.deepseek.com](https://platform.deepseek.com), click the *
 2. Click the **xHunter** toolbar icon.
 3. **Paste** your CV or **Upload** a PDF/DOCX, then **Save CV** (persists across sessions).
 4. **Analyze Match** → scrapes the job description and shows your score, strengths, gaps, and keywords.
-5. **Tailor My CV** → rewrites your CV for the role.
-6. **Download Tailored CV** → saves `CV_Tailored_<timestamp>.pdf`.
+5. **Tailor My CV** → rewrites your CV for the role. **Download Tailored CV** saves `CV_Tailored_<timestamp>.pdf`.
+6. **Write Cover Letter** → drafts a cover letter for the same posting. **Download Cover Letter** saves `Cover_Letter_<timestamp>.pdf`. (Tailoring and the cover letter are independent — do either, or both.)
 7. **New job** clears the results to start fresh (your saved CV and key stay).
 
 ---
@@ -78,8 +87,9 @@ Get a key at [platform.deepseek.com](https://platform.deepseek.com), click the *
 
 - **Manifest V3**, vanilla JavaScript, no backend.
 - `content.js` scrapes the visible job description from the active tab.
-- `background.js` (service worker) makes both DeepSeek calls and writes results to `chrome.storage.local`; the popup renders off `storage.onChanged` so a single result is shown exactly once, even if the popup was reopened mid-run.
+- `background.js` (service worker) makes the DeepSeek calls and writes results to `chrome.storage.local`; the popup renders off `storage.onChanged` so a single result is shown exactly once, even if the popup was reopened mid-run.
 - **Stage 1** returns the match analysis as JSON; **Stage 2** returns the tailored CV as structured JSON, which the popup renders to PDF with jsPDF (Times, US Letter, 0.5″ margins, ruled section headers) for a classic, ATS-friendly résumé.
+- **Stage 3** returns a structured cover letter as JSON, rendered to a separate PDF (Helvetica, A4) modelled on a classic LaTeX letter template — the name in CV order (first name in the accent color + surname in black), an accent rule, a right-aligned recipient/date block, an `RE:` line, and a signature. Stages 2 and 3 both reuse the job description scraped in Stage 1.
 - All libraries are bundled in `libs/` — **no CDN calls at runtime** (Chrome blocks them for extensions anyway).
 
 ## Project structure

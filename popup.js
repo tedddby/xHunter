@@ -49,6 +49,8 @@
     actionFooter: $('actionFooter'),
     tailorBtn: $('tailorBtn'),
     downloadBtn: $('downloadBtn'),
+    coverBtn: $('coverBtn'),
+    coverDownloadBtn: $('coverDownloadBtn'),
     resetBtn: $('resetBtn')
   };
 
@@ -57,7 +59,8 @@
     mode: 'paste', // 'paste' | 'upload'
     uploadedText: '',
     jobDescription: '',
-    tailoredCv: ''
+    tailoredCv: '',
+    coverLetter: ''
   };
 
   // ---------- Storage helpers ----------
@@ -91,6 +94,7 @@
     if (code === 'NO_KEY') return 'Please enter your DeepSeek API key';
     if (code === 'PARSE') return "Analysis failed — couldn't parse response. Try again.";
     if (code === 'PARSE_CV') return "Tailoring failed — couldn't parse response. Try again.";
+    if (code === 'PARSE_LETTER') return "Cover letter failed — couldn't parse response. Try again.";
     return code || 'Something went wrong. Please try again.';
   }
 
@@ -101,6 +105,16 @@
       `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_` +
       `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
     );
+  }
+
+  // Long-form date for the cover letter (e.g. "June 13, 2026"), like LaTeX \today.
+  function longDate() {
+    const months = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    const d = new Date();
+    return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
   }
 
   // ---------- Settings (API key) ----------
@@ -369,9 +383,11 @@
       });
     });
 
-    // A fresh analysis invalidates any previously tailored CV.
+    // A fresh analysis invalidates any previously tailored CV / cover letter.
     state.tailoredCv = '';
     el.downloadBtn.classList.add('hidden');
+    state.coverLetter = '';
+    el.coverDownloadBtn.classList.add('hidden');
 
     // Reveal the sticky footer + Tailor button (re-trigger its spring animation).
     el.actionFooter.classList.remove('hidden');
@@ -379,6 +395,9 @@
     el.tailorBtn.style.animation = 'none';
     void el.tailorBtn.offsetWidth;
     el.tailorBtn.style.animation = '';
+
+    // Reveal the Cover Letter action alongside Tailor.
+    el.coverBtn.classList.remove('hidden', 'loading');
 
     el.reportCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -473,6 +492,40 @@
     } catch (e) {
       showError(e && e.message ? e.message : String(e));
       setTailorLoading(false);
+    }
+  }
+
+  // ---------- Cover-letter flow ----------
+  function setCoverLoading(loading) {
+    el.coverBtn.classList.toggle('loading', loading);
+    el.coverBtn.disabled = loading;
+  }
+
+  el.coverBtn.addEventListener('click', runCover);
+
+  async function runCover() {
+    clearError();
+    const { cv_text } = await storageGet(['cv_text']);
+    if (!cv_text || !cv_text.trim()) {
+      showError('Please save your CV first');
+      return;
+    }
+    if (!state.jobDescription) {
+      showError('Run "Analyze Match" first so we know the job.');
+      return;
+    }
+
+    setCoverLoading(true);
+    try {
+      // Result delivered via the storage.onChanged listener (see below).
+      await chrome.runtime.sendMessage({
+        type: 'COVER_LETTER',
+        cv: cv_text,
+        jd: state.jobDescription
+      });
+    } catch (e) {
+      showError(e && e.message ? e.message : String(e));
+      setCoverLoading(false);
     }
   }
 
@@ -662,6 +715,271 @@
     doc.save(`CV_Tailored_${timestamp()}.pdf`);
   }
 
+  // ---------- Cover-letter PDF ----------
+  el.coverDownloadBtn.addEventListener('click', () => {
+    const letter = state.coverLetter;
+    if (
+      !letter ||
+      typeof letter !== 'object' ||
+      !Array.isArray(letter.paragraphs) ||
+      letter.paragraphs.length === 0
+    ) {
+      showError('No cover letter yet — write one first.');
+      return;
+    }
+    try {
+      generateCoverLetterPdf(letter);
+    } catch (e) {
+      showError(`PDF generation failed: ${e && e.message ? e.message : e}`);
+    }
+  });
+
+  // Renders a structured cover letter to a PDF modelled on a classic LaTeX
+  // letter template: a left header with the name in CV order (first name in red
+  // + surname in black), a red rule, gray contact lines (with icons), a
+  // right-aligned recipient/date block, a red "RE:" subject line, justified body
+  // paragraphs, and a signature closing with a pen-nib mark. A4, Helvetica,
+  // 10/13mm margins.
+  function generateCoverLetterPdf(letter) {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+    const FONT = 'helvetica';
+    const pageW = doc.internal.pageSize.getWidth(); // 210
+    const pageH = doc.internal.pageSize.getHeight(); // 297
+    const M = 10; // left/right margin (template: 10mm)
+    const MT = 13; // top/bottom margin (template: 13mm)
+    const contentW = pageW - M * 2;
+    const BOTTOM = pageH - MT;
+    let y = MT;
+
+    const RED = [188, 20, 20]; // redBlood
+    const GRAY = [153, 150, 142]; // grayShy
+    const BLACK = [20, 20, 20];
+    const setText = (c) => doc.setTextColor(c[0], c[1], c[2]);
+    const setStroke = (c) => doc.setDrawColor(c[0], c[1], c[2]);
+    const setArea = (c) => doc.setFillColor(c[0], c[1], c[2]);
+
+    const ensure = (h) => {
+      if (y + h > BOTTOM) {
+        doc.addPage();
+        y = MT;
+      }
+    };
+
+    // Resolve first/last name (fall back to splitting the full name). A single
+    // token becomes the first name so the accent color always lands on it.
+    let first = (letter.first_name || '').trim();
+    let last = (letter.last_name || '').trim();
+    if (!first && !last) {
+      const parts = (letter.name || 'Your Name').trim().split(/\s+/);
+      first = parts.length > 1 ? parts.slice(0, -1).join(' ') : parts[0] || 'Name';
+      last = parts.length > 1 ? parts[parts.length - 1] : '';
+    }
+
+    // ---- Small vector icons (drawn, since standard PDF fonts lack glyphs) ----
+    // Each is anchored to a text baseline at y and occupies ~3.4mm above it.
+    function pinIcon(x, baseY) {
+      setStroke(GRAY);
+      setArea(GRAY);
+      const r = 1.35;
+      const cx = x + r;
+      const cy = baseY - 3.6 + r;
+      doc.circle(cx, cy, r, 'F');
+      doc.triangle(cx - r * 0.7, cy + r * 0.45, cx + r * 0.7, cy + r * 0.45, cx, baseY - 0.3, 'F');
+      doc.setFillColor(255, 255, 255);
+      doc.circle(cx, cy, 0.5, 'F');
+    }
+    function phoneIcon(x, baseY) {
+      setStroke(GRAY);
+      doc.setLineWidth(0.35);
+      const w = 2.1;
+      const h = 3.3;
+      const top = baseY - 3.5;
+      doc.roundedRect(x, top, w, h, 0.4, 0.4, 'S');
+      doc.line(x + 0.6, top + 0.55, x + w - 0.6, top + 0.55);
+      setArea(GRAY);
+      doc.circle(x + w / 2, top + h - 0.5, 0.27, 'F');
+    }
+    function mailIcon(x, baseY) {
+      setStroke(GRAY);
+      doc.setLineWidth(0.35);
+      const w = 4.3;
+      const h = 3.0;
+      const top = baseY - 3.3;
+      doc.rect(x, top, w, h, 'S');
+      doc.line(x, top, x + w / 2, top + h * 0.62);
+      doc.line(x + w, top, x + w / 2, top + h * 0.62);
+    }
+    function penNibIcon(x, baseY) {
+      setStroke(RED);
+      setArea(RED);
+      const w = 4.6;
+      const h = 7;
+      const top = baseY - h;
+      const cx = x + w / 2;
+      doc.rect(x + w * 0.22, top, w * 0.56, 2.4, 'F'); // shaft
+      doc.triangle(x, top + 2, x + w, top + 2, cx, baseY, 'F'); // nib
+      doc.setFillColor(255, 255, 255);
+      doc.circle(cx, top + 3.3, 0.55, 'F'); // breather hole
+      doc.setDrawColor(255, 255, 255);
+      doc.setLineWidth(0.4);
+      doc.line(cx, top + 3.9, cx, baseY - 0.8); // slit
+    }
+
+    // ---- Header: first name (red) + surname (black), in CV order ----
+    doc.setFont(FONT, 'bold');
+    doc.setFontSize(26);
+    const yName = y + 9;
+    let hx = M;
+    if (first) {
+      setText(RED);
+      doc.text(first, hx, yName);
+      hx += doc.getTextWidth(first) + doc.getTextWidth(' ');
+    }
+    if (last) {
+      setText(BLACK);
+      doc.text(last, hx, yName);
+    }
+    y = yName + 3;
+
+    // ---- Red rule ----
+    setStroke(RED);
+    doc.setLineWidth(0.7);
+    doc.line(M, y, pageW - M, y);
+    y += 6.5;
+
+    // ---- Sender contact (gray, with icons) ----
+    const sender = letter.sender || {};
+    setText(GRAY);
+    doc.setFont(FONT, 'normal');
+    doc.setFontSize(10);
+    const locText = [sender.address, sender.location].filter(Boolean).join(' - ');
+    const ix = M + 6; // text offset past the icon
+    if (locText) {
+      pinIcon(M, y);
+      setText(GRAY);
+      doc.text(locText, ix, y);
+      y += 5;
+    }
+    if (sender.phone) {
+      phoneIcon(M, y);
+      setText(GRAY);
+      doc.text(sender.phone, ix, y);
+      y += 5;
+    }
+    if (sender.email) {
+      mailIcon(M, y);
+      setText(GRAY);
+      doc.text(sender.email, ix, y);
+      y += 5;
+    }
+    y += 3;
+
+    // ---- Recipient block (right-aligned): date, company, then gray details ----
+    const rcp = letter.recipient || {};
+    const rx = pageW - M;
+    setText(BLACK);
+    doc.setFont(FONT, 'bold');
+    doc.setFontSize(10.5);
+    doc.text(longDate(), rx, y, { align: 'right' });
+    y += 5.2;
+    if (rcp.company) {
+      doc.setFont(FONT, 'bold');
+      doc.text(rcp.company, rx, y, { align: 'right' });
+      y += 5.6;
+    }
+    const rDetails = [rcp.contact, rcp.address, rcp.location].filter(Boolean);
+    if (rDetails.length) {
+      setText(GRAY);
+      doc.setFont(FONT, 'normal');
+      doc.setFontSize(9);
+      rDetails.forEach((t) => {
+        // small-caps approximation: uppercase at a smaller size
+        doc.text(String(t).toUpperCase(), rx, y, { align: 'right' });
+        y += 4.2;
+      });
+    }
+    y += 8;
+
+    // ---- RE: subject line ----
+    if (letter.subject) {
+      ensure(7);
+      doc.setFontSize(10.5);
+      setText(RED);
+      doc.setFont(FONT, 'bold');
+      const reLabel = 'RE: ';
+      doc.text(reLabel, M, y);
+      const reW = doc.getTextWidth(reLabel);
+      setText(BLACK);
+      const subjLines = doc.splitTextToSize(letter.subject, contentW - reW);
+      doc.text(subjLines[0] || '', M + reW, y);
+      y += 5.2;
+      for (let i = 1; i < subjLines.length; i++) {
+        ensure(5.2);
+        doc.text(subjLines[i], M, y);
+        y += 5.2;
+      }
+      y += 5;
+    }
+
+    // ---- Body ----
+    const bodyH = 5.6;
+    setText(BLACK);
+    doc.setFont(FONT, 'normal');
+    doc.setFontSize(11);
+
+    if (letter.greeting) {
+      ensure(bodyH);
+      doc.text(letter.greeting, M, y);
+      y += bodyH + 2.5;
+    }
+
+    const writeBlock = (text, gap) => {
+      const lines = doc.splitTextToSize(text, contentW);
+      lines.forEach((ln) => {
+        ensure(bodyH);
+        doc.text(ln, M, y);
+        y += bodyH;
+      });
+      y += gap;
+    };
+
+    (letter.paragraphs || []).forEach((p) => writeBlock(p, 3.8));
+    if (letter.closing_line) writeBlock(letter.closing_line, 3.8);
+
+    // ---- Signature ----
+    ensure(20);
+    y += 2;
+    setText(BLACK);
+    doc.setFont(FONT, 'normal');
+    doc.setFontSize(11);
+    doc.text(letter.signoff || 'Sincerely,', M, y);
+    y += 7;
+    doc.setFont(FONT, 'bold');
+    doc.setFontSize(12);
+    let sx = M;
+    if (first) {
+      setText(RED);
+      doc.text(first, sx, y);
+      sx += doc.getTextWidth(first) + doc.getTextWidth(' ');
+    }
+    if (last) {
+      setText(BLACK);
+      doc.text(last, sx, y);
+    }
+    y += 7;
+    penNibIcon(M, y);
+
+    doc.save(`Cover_Letter_${timestamp()}.pdf`);
+  }
+
+  function showCoverDownload() {
+    // Progressed past writing: swap the Cover Letter button for its download.
+    el.actionFooter.classList.remove('hidden');
+    el.coverBtn.classList.add('hidden');
+    el.coverDownloadBtn.classList.remove('hidden');
+  }
+
   function showDownload() {
     // Progressed past tailoring: swap the Tailor button for Download.
     el.actionFooter.classList.remove('hidden');
@@ -675,7 +993,7 @@
   async function resetJob() {
     await new Promise((resolve) =>
       chrome.storage.local.remove(
-        ['last_analysis', 'last_tailored_cv', 'last_job_description'],
+        ['last_analysis', 'last_tailored_cv', 'last_cover_letter', 'last_job_description'],
         resolve
       )
     );
@@ -683,13 +1001,17 @@
 
     state.jobDescription = '';
     state.tailoredCv = '';
+    state.coverLetter = '';
 
     el.reportCard.classList.add('hidden');
     el.tailorBtn.classList.add('hidden');
     el.downloadBtn.classList.add('hidden');
+    el.coverBtn.classList.add('hidden');
+    el.coverDownloadBtn.classList.add('hidden');
     el.actionFooter.classList.add('hidden');
     setAnalyzeLoading(false);
     setTailorLoading(false);
+    setCoverLoading(false);
     clearError();
 
     const app = document.querySelector('.app');
@@ -698,10 +1020,12 @@
   el.resetBtn.addEventListener('click', resetJob);
 
   // ---------- Single source of truth: react to background result writes ----------
-  // The background worker writes terminal results to chrome.storage.local and
-  // flips job_status back to 'idle'. Keying off that transition renders each
-  // result exactly once, whether this popup initiated the call or was reopened
-  // while it was still running.
+  // The background worker writes each terminal result to chrome.storage.local
+  // together with job_status:'idle'. We dispatch on WHICH result key landed in
+  // this write rather than on the prior status — that keeps each result rendered
+  // exactly once and stays correct even when Tailor and Cover Letter (both
+  // available after analysis) are run at the same time, since a single status
+  // flag can't represent two in-flight operations.
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
 
@@ -712,23 +1036,31 @@
     const status = changes.job_status;
     if (!status || status.newValue !== 'idle') return;
 
-    const was = status.oldValue; // 'analyzing' | 'tailoring'
     const error = changes.last_error ? changes.last_error.newValue : '';
 
-    if (was === 'analyzing') {
+    if (changes.last_analysis && changes.last_analysis.newValue) {
       setAnalyzeLoading(false);
-      if (error) showError(describeError(error));
-      else if (changes.last_analysis && changes.last_analysis.newValue) {
-        renderReport(changes.last_analysis.newValue);
-      }
-    } else if (was === 'tailoring') {
+      renderReport(changes.last_analysis.newValue);
+    } else if (changes.last_tailored_cv && changes.last_tailored_cv.newValue) {
       setTailorLoading(false);
-      if (error) showError(describeError(error));
-      else if (changes.last_tailored_cv && changes.last_tailored_cv.newValue) {
-        state.tailoredCv = changes.last_tailored_cv.newValue;
-        showDownload();
-        el.downloadBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }
+      clearError();
+      state.tailoredCv = changes.last_tailored_cv.newValue;
+      showDownload();
+      el.downloadBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } else if (changes.last_cover_letter && changes.last_cover_letter.newValue) {
+      setCoverLoading(false);
+      clearError();
+      state.coverLetter = changes.last_cover_letter.newValue;
+      showCoverDownload();
+      el.coverDownloadBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } else if (error) {
+      // An error write carries no result key, so we can't always attribute it to
+      // one action — clear every spinner and surface the message. Any operation
+      // still running will re-render correctly from its own completion write.
+      setAnalyzeLoading(false);
+      setTailorLoading(false);
+      setCoverLoading(false);
+      showError(describeError(error));
     }
   });
 
@@ -739,6 +1071,7 @@
       'deepseek_api_key',
       'last_analysis',
       'last_tailored_cv',
+      'last_cover_letter',
       'last_job_description',
       'job_status',
       'last_error'
@@ -754,6 +1087,10 @@
       state.tailoredCv = data.last_tailored_cv;
       showDownload();
     }
+    if (data.last_cover_letter) {
+      state.coverLetter = data.last_cover_letter;
+      showCoverDownload();
+    }
 
     // A call may still be in flight — show the right loading state and let the
     // storage.onChanged listener render the result when it lands.
@@ -761,6 +1098,10 @@
     if (data.job_status === 'tailoring') {
       el.tailorBtn.classList.remove('hidden');
       setTailorLoading(true);
+    }
+    if (data.job_status === 'cover_lettering') {
+      el.coverBtn.classList.remove('hidden');
+      setCoverLoading(true);
     }
   }
 

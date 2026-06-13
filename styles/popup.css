@@ -638,6 +638,24 @@ body {
   animation: spin 0.7s linear infinite;
 }
 
+/* Cover letter — secondary action, accent-tinted (pairs with Tailor) */
+.cover-btn {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: none;
+}
+.cover-btn:hover {
+  background: rgba(99, 91, 255, 0.14);
+  box-shadow: none;
+}
+.cover-btn.loading {
+  color: transparent;
+}
+.cover-btn.loading::after {
+  border-color: rgba(99, 91, 255, 0.35);
+  border-top-color: var(--accent);
+}
+
 /* Download — secondary */
 .download-btn {
   width: 100%;
