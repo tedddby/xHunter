@@ -44,7 +44,7 @@ One CV is never enough. Every posting wants different keywords in a different or
 
 - **Match analysis** — a match score, your strengths, the gaps, and keywords to add (click any keyword to copy it).
 - **One-click tailoring** — rewrites your CV in the posting's language. Facts, dates, and companies stay 100% accurate; nothing is fabricated.
-- **Cover letters** — generates a tailored, one-page cover letter grounded in your real CV, exported as a styled PDF (surname-first header, accent rule, RE: line, signature). Nothing is invented — unknown details (recipient name/address) are simply left out.
+- **Cover letters** — generates a tailored, one-page cover letter grounded in your real CV, exported as a styled PDF based on the Deedy letter template (centered name, contact line, full-width rule, company/date row, signature). Nothing is invented — unknown details (company name/address) are simply left out.
 - **Professional PDF export** — a clean, ATS-parsable résumé layout (centered header, ruled sections, bullets) generated with jsPDF.
 - **Paste or upload** — paste plain text, or drop a **PDF / DOCX** and it extracts the text for you.
 - **Private by design** — your CV and API key live in `chrome.storage.local`. The only network calls go to `api.deepseek.com`, and only when you click Analyze/Tailor.
@@ -89,7 +89,7 @@ Get a key at [platform.deepseek.com](https://platform.deepseek.com), click the *
 - `content.js` scrapes the visible job description from the active tab.
 - `background.js` (service worker) makes the DeepSeek calls and writes results to `chrome.storage.local`; the popup renders off `storage.onChanged` so a single result is shown exactly once, even if the popup was reopened mid-run.
 - **Stage 1** returns the match analysis as JSON; **Stage 2** returns the tailored CV as structured JSON, which the popup renders to PDF with jsPDF (Times, US Letter, 0.5″ margins, ruled section headers) for a classic, ATS-friendly résumé.
-- **Stage 3** returns a structured cover letter as JSON, rendered to a separate PDF (Helvetica, A4) modelled on a classic LaTeX letter template — the name in CV order (first name in the accent color + surname in black), an accent rule, a right-aligned recipient/date block, an `RE:` line, and a signature. Stages 2 and 3 both reuse the job description scraped in Stage 1.
+- **Stage 3** returns a structured cover letter as JSON, rendered to a separate PDF (Helvetica, A4) modelled on the Deedy cover-letter template — a centered name (first name in the accent color + surname in dark), a centered contact line, a full-width rule, a company-name/date row, the body paragraphs, and a `Sincerely, / Name` closing. Stages 2 and 3 both reuse the job description scraped in Stage 1.
 - All libraries are bundled in `libs/` — **no CDN calls at runtime** (Chrome blocks them for extensions anyway).
 
 ## Project structure
@@ -114,7 +114,7 @@ Issues and PRs are welcome — bug reports, more robust job-description scraping
 
 ## Credits
 
-PDF layout inspired by the [Jake Gutierrez résumé template](https://github.com/sb2nov/resume) (MIT). Bundled libraries and their licenses:
+CV PDF layout inspired by the [Jake Gutierrez résumé template](https://github.com/sb2nov/resume) (MIT); cover-letter layout inspired by the [Deedy cover-letter template](https://github.com/deedy/Deedy-Resume) (Apache-2.0). Bundled libraries and their licenses:
 
 - [jsPDF](https://github.com/parallax/jsPDF) — MIT
 - [mammoth.js](https://github.com/mwilliamson/mammoth.js) — BSD-2-Clause

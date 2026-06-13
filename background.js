@@ -92,40 +92,27 @@ const STAGE3_SYSTEM = `You are an expert career coach and cover-letter writer. W
 Rules:
 - Ground every claim in the candidate's real CV — never invent experience, employers, skills, or metrics.
 - Address the specific role and company; mirror the job's key requirements and language naturally.
-- Open with a strong hook, demonstrate fit in the body with concrete evidence drawn from the CV, and close with a confident call to action.
-- Provide exactly 3 to 4 body paragraphs, professional but warm. No clichés, no filler, no repeating the CV verbatim. Keep it to one page.
-- Use the candidate's real name and contact details from the CV. Split their name into first_name and last_name.
-- NEVER fabricate facts you don't have. Leave a field as an empty string "" when the information isn't present:
-  - sender fields come only from the CV (address/location are often missing — that's fine, leave them "").
-  - recipient.company comes from the job description only if stated; recipient.contact/address/location only if explicitly given. Do NOT invent a hiring manager's name or a mailing address.
-- greeting: address the named contact if the job description gives one, otherwise "Dear Hiring Manager,".
-- subject: a short line naming the role being applied for (this becomes the "RE:" line).
-- closing_line: a single confident call-to-action sentence placed just before the signature.
+- Provide 3 to 4 body paragraphs: open by naming the role and why you're a strong fit; use the middle paragraph(s) to back each claim with concrete evidence from the CV; make the LAST paragraph a brief, confident thank-you and call to action. Professional but warm — no clichés, no filler, no repeating the CV verbatim. Keep it to one page.
+- Split the candidate's real name into first_name and last_name (natural order — first name first).
+- contact: an ordered list of the candidate's own contact details from the CV for the header line (e.g. city, email, phone, linkedin, github). Include only what the CV actually contains.
+- company: the hiring company's name from the job description if stated, otherwise "".
+- company_address: any company location/address lines given in the job description (e.g. ["City, State"]); otherwise []. Do NOT invent an address.
+- greeting: address a named contact if the job description gives one, otherwise "Dear Hiring Manager,".
+- NEVER fabricate facts you don't have — use "" or [] for anything missing.
 
-Return ONLY this JSON shape (use "" for any field you don't have — never fabricate):
+Return ONLY this JSON shape (use "" / [] for anything you don't have — never fabricate):
 {
   "first_name": "Jane",
   "last_name": "Smith",
-  "sender": {
-    "address": "123 Main Street",
-    "location": "City, State ZIP",
-    "phone": "+1 555 555 5555",
-    "email": "jane@example.com"
-  },
-  "recipient": {
-    "company": "Acme Corp",
-    "contact": "Ms. Doe, Hiring Manager",
-    "address": "456 Market Street",
-    "location": "City, State ZIP"
-  },
-  "subject": "Application for the Senior Backend Engineer position",
+  "contact": ["City, Country", "jane@example.com", "+1 555 555 5555", "linkedin.com/in/jane", "github.com/jane"],
+  "company": "Acme Corp",
+  "company_address": ["City, State"],
   "greeting": "Dear Hiring Manager,",
   "paragraphs": [
     "Opening paragraph naming the role and a compelling reason you're a strong fit.",
-    "Body paragraph with concrete evidence from your experience mapped to the role's needs.",
-    "Closing paragraph conveying enthusiasm for the company and the role."
+    "Body paragraph backing your claims with concrete evidence from your experience.",
+    "Brief closing paragraph thanking them for their consideration and inviting a conversation."
   ],
-  "closing_line": "I would welcome the chance to discuss how I can contribute to your team.",
   "signoff": "Sincerely,"
 }`;
 
@@ -272,28 +259,15 @@ function asObject(value) {
 
 function normalizeCoverLetter(obj) {
   const o = asObject(obj);
-  const sender = asObject(o.sender);
-  const recipient = asObject(o.recipient);
   return {
     first_name: asString(o.first_name),
     last_name: asString(o.last_name),
     name: asString(o.name), // fallback when first/last aren't split out
-    sender: {
-      address: asString(sender.address),
-      location: asString(sender.location),
-      phone: asString(sender.phone),
-      email: asString(sender.email)
-    },
-    recipient: {
-      company: asString(recipient.company),
-      contact: asString(recipient.contact),
-      address: asString(recipient.address),
-      location: asString(recipient.location)
-    },
-    subject: asString(o.subject),
+    contact: asStringArray(o.contact),
+    company: asString(o.company),
+    company_address: asStringArray(o.company_address),
     greeting: asString(o.greeting),
     paragraphs: asStringArray(o.paragraphs),
-    closing_line: asString(o.closing_line),
     signoff: asString(o.signoff) || 'Sincerely,'
   };
 }

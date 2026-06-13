@@ -529,6 +529,62 @@
     }
   }
 
+  // ---------- Clickable contact links (shared by both PDFs) ----------
+  // Classify a contact item into an openable URL, or null if it's plain text.
+  function linkFor(text) {
+    const t = String(text).trim();
+    if (!t) return null;
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)) return 'mailto:' + t; // email
+    if (/^https?:\/\//i.test(t)) return t; // explicit URL
+    if (/^[a-z0-9.-]+\.[a-z]{2,}(\/\S*)?$/i.test(t)) return 'https://' + t; // bare domain/path
+    if (/^\+?[\d(][\d\s().+\-]{5,}$/.test(t)) return 'tel:' + t.replace(/[^\d+]/g, ''); // phone
+    return null;
+  }
+
+  // Renders contact `items` joined by " | ", centered at centerX and wrapped to
+  // maxWidth, turning link-like items (email, URLs, phone) into clickable
+  // annotations. Font and color must be set by the caller. Returns the y after
+  // the block. Used by both the résumé and cover-letter PDFs.
+  function renderContactLine(doc, items, centerX, startY, lineH, maxWidth) {
+    const sep = '   |   ';
+    const sepW = doc.getTextWidth(sep);
+
+    // Pack items into lines that fit maxWidth.
+    const lines = [];
+    let cur = [];
+    let curW = 0;
+    (items || []).forEach((raw) => {
+      const text = String(raw).trim();
+      if (!text) return;
+      const w = doc.getTextWidth(text);
+      if (cur.length && curW + sepW + w > maxWidth) {
+        lines.push(cur);
+        cur = [];
+        curW = 0;
+      }
+      cur.push({ text, url: linkFor(text), w });
+      curW += (cur.length > 1 ? sepW : 0) + w;
+    });
+    if (cur.length) lines.push(cur);
+
+    let y = startY;
+    lines.forEach((segs) => {
+      const totalW = segs.reduce((s, seg, i) => s + seg.w + (i ? sepW : 0), 0);
+      let x = centerX - totalW / 2;
+      segs.forEach((seg, i) => {
+        if (i) {
+          doc.text(sep, x, y);
+          x += sepW;
+        }
+        if (seg.url) doc.textWithLink(seg.text, x, y, { url: seg.url });
+        else doc.text(seg.text, x, y);
+        x += seg.w;
+      });
+      y += lineH;
+    });
+    return y;
+  }
+
   // ---------- PDF generation ----------
   el.downloadBtn.addEventListener('click', () => {
     const resume = state.tailoredCv;
@@ -578,11 +634,7 @@
     if (contact.length) {
       doc.setFont(FONT, 'normal');
       doc.setFontSize(9.5);
-      const wrapped = doc.splitTextToSize(contact.join('   |   '), contentW);
-      wrapped.forEach((line) => {
-        doc.text(line, pageW / 2, y, { align: 'center' });
-        y += 4.4;
-      });
+      y = renderContactLine(doc, contact, pageW / 2, y, 4.4, contentW);
     }
     y += 2.5;
 
@@ -734,30 +786,27 @@
     }
   });
 
-  // Renders a structured cover letter to a PDF modelled on a classic LaTeX
-  // letter template: a left header with the name in CV order (first name in red
-  // + surname in black), a red rule, gray contact lines (with icons), a
-  // right-aligned recipient/date block, a red "RE:" subject line, justified body
-  // paragraphs, and a signature closing with a pen-nib mark. A4, Helvetica,
-  // 10/13mm margins.
+  // Renders a structured cover letter to a PDF modelled on the Deedy cover-letter
+  // template: a centered name (first name in the accent color, surname in dark),
+  // a centered contact line, a full-width rule, a company-name + date row, the
+  // body paragraphs, and a simple "signoff / name" closing. A4, Helvetica.
   function generateCoverLetterPdf(letter) {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
     const FONT = 'helvetica';
     const pageW = doc.internal.pageSize.getWidth(); // 210
     const pageH = doc.internal.pageSize.getHeight(); // 297
-    const M = 10; // left/right margin (template: 10mm)
-    const MT = 13; // top/bottom margin (template: 13mm)
+    const M = 18; // left/right margin
+    const MT = 16; // top/bottom margin
     const contentW = pageW - M * 2;
     const BOTTOM = pageH - MT;
     let y = MT;
 
-    const RED = [188, 20, 20]; // redBlood
-    const GRAY = [153, 150, 142]; // grayShy
-    const BLACK = [20, 20, 20];
+    const ACCENT = [99, 91, 255]; // xHunter indigo — Deedy "primary" color
+    const DARK = [38, 38, 38]; // surname + body text
+    const GRAY = [110, 116, 128]; // contact line, address, date
     const setText = (c) => doc.setTextColor(c[0], c[1], c[2]);
     const setStroke = (c) => doc.setDrawColor(c[0], c[1], c[2]);
-    const setArea = (c) => doc.setFillColor(c[0], c[1], c[2]);
 
     const ensure = (h) => {
       if (y + h > BOTTOM) {
@@ -776,165 +825,74 @@
       last = parts.length > 1 ? parts[parts.length - 1] : '';
     }
 
-    // ---- Small vector icons (drawn, since standard PDF fonts lack glyphs) ----
-    // Each is anchored to a text baseline at y and occupies ~3.4mm above it.
-    function pinIcon(x, baseY) {
-      setStroke(GRAY);
-      setArea(GRAY);
-      const r = 1.35;
-      const cx = x + r;
-      const cy = baseY - 3.6 + r;
-      doc.circle(cx, cy, r, 'F');
-      doc.triangle(cx - r * 0.7, cy + r * 0.45, cx + r * 0.7, cy + r * 0.45, cx, baseY - 0.3, 'F');
-      doc.setFillColor(255, 255, 255);
-      doc.circle(cx, cy, 0.5, 'F');
-    }
-    function phoneIcon(x, baseY) {
-      setStroke(GRAY);
-      doc.setLineWidth(0.35);
-      const w = 2.1;
-      const h = 3.3;
-      const top = baseY - 3.5;
-      doc.roundedRect(x, top, w, h, 0.4, 0.4, 'S');
-      doc.line(x + 0.6, top + 0.55, x + w - 0.6, top + 0.55);
-      setArea(GRAY);
-      doc.circle(x + w / 2, top + h - 0.5, 0.27, 'F');
-    }
-    function mailIcon(x, baseY) {
-      setStroke(GRAY);
-      doc.setLineWidth(0.35);
-      const w = 4.3;
-      const h = 3.0;
-      const top = baseY - 3.3;
-      doc.rect(x, top, w, h, 'S');
-      doc.line(x, top, x + w / 2, top + h * 0.62);
-      doc.line(x + w, top, x + w / 2, top + h * 0.62);
-    }
-    function penNibIcon(x, baseY) {
-      setStroke(RED);
-      setArea(RED);
-      const w = 4.6;
-      const h = 7;
-      const top = baseY - h;
-      const cx = x + w / 2;
-      doc.rect(x + w * 0.22, top, w * 0.56, 2.4, 'F'); // shaft
-      doc.triangle(x, top + 2, x + w, top + 2, cx, baseY, 'F'); // nib
-      doc.setFillColor(255, 255, 255);
-      doc.circle(cx, top + 3.3, 0.55, 'F'); // breather hole
-      doc.setDrawColor(255, 255, 255);
-      doc.setLineWidth(0.4);
-      doc.line(cx, top + 3.9, cx, baseY - 0.8); // slit
-    }
-
-    // ---- Header: first name (red) + surname (black), in CV order ----
+    // ---- Header: centered name (first name accent + surname dark), CV order ----
     doc.setFont(FONT, 'bold');
-    doc.setFontSize(26);
+    doc.setFontSize(30);
+    const wFirst = first ? doc.getTextWidth(first) : 0;
+    const wSpace = first && last ? doc.getTextWidth(' ') : 0;
+    const wLast = last ? doc.getTextWidth(last) : 0;
     const yName = y + 9;
-    let hx = M;
+    let nx = (pageW - (wFirst + wSpace + wLast)) / 2;
     if (first) {
-      setText(RED);
-      doc.text(first, hx, yName);
-      hx += doc.getTextWidth(first) + doc.getTextWidth(' ');
+      setText(ACCENT);
+      doc.text(first, nx, yName);
+      nx += wFirst + wSpace;
     }
     if (last) {
-      setText(BLACK);
-      doc.text(last, hx, yName);
+      setText(DARK);
+      doc.text(last, nx, yName);
     }
-    y = yName + 3;
+    y = yName + 4.5;
 
-    // ---- Red rule ----
-    setStroke(RED);
-    doc.setLineWidth(0.7);
+    // ---- Centered contact line (links are clickable) ----
+    const contact = (letter.contact || []).filter(Boolean);
+    if (contact.length) {
+      setText(GRAY);
+      doc.setFont(FONT, 'normal');
+      doc.setFontSize(9.5);
+      y = renderContactLine(doc, contact, pageW / 2, y, 4.6, contentW);
+    }
+    y += 1.5;
+
+    // ---- Full-width rule ----
+    setStroke(DARK);
+    doc.setLineWidth(0.4);
     doc.line(M, y, pageW - M, y);
-    y += 6.5;
+    y += 9;
 
-    // ---- Sender contact (gray, with icons) ----
-    const sender = letter.sender || {};
+    // ---- Company name (left) + date (right), top-aligned row ----
+    const company = (letter.company || '').trim();
+    const addr = (letter.company_address || []).filter(Boolean);
+    const rowY = y;
+    if (company) {
+      setText(DARK);
+      doc.setFont(FONT, 'bold');
+      doc.setFontSize(11);
+      doc.text(company, M, rowY);
+    }
     setText(GRAY);
     doc.setFont(FONT, 'normal');
     doc.setFontSize(10);
-    const locText = [sender.address, sender.location].filter(Boolean).join(' - ');
-    const ix = M + 6; // text offset past the icon
-    if (locText) {
-      pinIcon(M, y);
-      setText(GRAY);
-      doc.text(locText, ix, y);
-      y += 5;
-    }
-    if (sender.phone) {
-      phoneIcon(M, y);
-      setText(GRAY);
-      doc.text(sender.phone, ix, y);
-      y += 5;
-    }
-    if (sender.email) {
-      mailIcon(M, y);
-      setText(GRAY);
-      doc.text(sender.email, ix, y);
-      y += 5;
-    }
-    y += 3;
+    doc.text(longDate(), pageW - M, rowY, { align: 'right' });
 
-    // ---- Recipient block (right-aligned): date, company, then gray details ----
-    const rcp = letter.recipient || {};
-    const rx = pageW - M;
-    setText(BLACK);
-    doc.setFont(FONT, 'bold');
-    doc.setFontSize(10.5);
-    doc.text(longDate(), rx, y, { align: 'right' });
-    y += 5.2;
-    if (rcp.company) {
-      doc.setFont(FONT, 'bold');
-      doc.text(rcp.company, rx, y, { align: 'right' });
-      y += 5.6;
-    }
-    const rDetails = [rcp.contact, rcp.address, rcp.location].filter(Boolean);
-    if (rDetails.length) {
+    let leftY = rowY + (company ? 5.2 : 0);
+    if (addr.length) {
       setText(GRAY);
       doc.setFont(FONT, 'normal');
-      doc.setFontSize(9);
-      rDetails.forEach((t) => {
-        // small-caps approximation: uppercase at a smaller size
-        doc.text(String(t).toUpperCase(), rx, y, { align: 'right' });
-        y += 4.2;
+      doc.setFontSize(9.5);
+      addr.forEach((ln) => {
+        doc.text(ln, M, leftY);
+        leftY += 4.6;
       });
     }
-    y += 8;
+    y = Math.max(leftY, rowY + 5.2) + 7;
 
-    // ---- RE: subject line ----
-    if (letter.subject) {
-      ensure(7);
+    // ---- Body (greeting + paragraphs; the last paragraph is the thank-you) ----
+    const bodyH = 5.4;
+    const writePara = (text, gap) => {
+      setText(DARK);
+      doc.setFont(FONT, 'normal');
       doc.setFontSize(10.5);
-      setText(RED);
-      doc.setFont(FONT, 'bold');
-      const reLabel = 'RE: ';
-      doc.text(reLabel, M, y);
-      const reW = doc.getTextWidth(reLabel);
-      setText(BLACK);
-      const subjLines = doc.splitTextToSize(letter.subject, contentW - reW);
-      doc.text(subjLines[0] || '', M + reW, y);
-      y += 5.2;
-      for (let i = 1; i < subjLines.length; i++) {
-        ensure(5.2);
-        doc.text(subjLines[i], M, y);
-        y += 5.2;
-      }
-      y += 5;
-    }
-
-    // ---- Body ----
-    const bodyH = 5.6;
-    setText(BLACK);
-    doc.setFont(FONT, 'normal');
-    doc.setFontSize(11);
-
-    if (letter.greeting) {
-      ensure(bodyH);
-      doc.text(letter.greeting, M, y);
-      y += bodyH + 2.5;
-    }
-
-    const writeBlock = (text, gap) => {
       const lines = doc.splitTextToSize(text, contentW);
       lines.forEach((ln) => {
         ensure(bodyH);
@@ -944,31 +902,19 @@
       y += gap;
     };
 
-    (letter.paragraphs || []).forEach((p) => writeBlock(p, 3.8));
-    if (letter.closing_line) writeBlock(letter.closing_line, 3.8);
+    if (letter.greeting) writePara(letter.greeting, 3.6);
+    (letter.paragraphs || []).forEach((p) => writePara(p, 4));
 
-    // ---- Signature ----
-    ensure(20);
-    y += 2;
-    setText(BLACK);
+    // ---- Closing: signoff then full name (CV order) ----
+    ensure(16);
+    y += 3;
+    setText(DARK);
     doc.setFont(FONT, 'normal');
-    doc.setFontSize(11);
+    doc.setFontSize(10.5);
     doc.text(letter.signoff || 'Sincerely,', M, y);
-    y += 7;
-    doc.setFont(FONT, 'bold');
-    doc.setFontSize(12);
-    let sx = M;
-    if (first) {
-      setText(RED);
-      doc.text(first, sx, y);
-      sx += doc.getTextWidth(first) + doc.getTextWidth(' ');
-    }
-    if (last) {
-      setText(BLACK);
-      doc.text(last, sx, y);
-    }
-    y += 7;
-    penNibIcon(M, y);
+    y += 6;
+    const fullName = [first, last].filter(Boolean).join(' ');
+    doc.text(fullName, M, y);
 
     doc.save(`Cover_Letter_${timestamp()}.pdf`);
   }
