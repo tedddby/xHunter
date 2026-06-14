@@ -845,7 +845,13 @@
     y = yName + 4.5;
 
     // ---- Centered contact line (links are clickable) ----
-    const contact = (letter.contact || []).filter(Boolean);
+    // Prefer the flat `contact` list; fall back to a legacy `sender` object so
+    // letters cached under the previous schema still render their details.
+    let contact = (letter.contact || []).filter(Boolean);
+    if (!contact.length && letter.sender && typeof letter.sender === 'object') {
+      const s = letter.sender;
+      contact = [s.location || s.address, s.email, s.phone].filter(Boolean);
+    }
     if (contact.length) {
       setText(GRAY);
       doc.setFont(FONT, 'normal');
@@ -861,8 +867,13 @@
     y += 9;
 
     // ---- Company name (left) + date (right), top-aligned row ----
-    const company = (letter.company || '').trim();
-    const addr = (letter.company_address || []).filter(Boolean);
+    // Fall back to a legacy `recipient` object for letters cached under the old schema.
+    let company = (letter.company || '').trim();
+    let addr = (letter.company_address || []).filter(Boolean);
+    if (!company && letter.recipient && typeof letter.recipient === 'object') {
+      company = (letter.recipient.company || '').trim();
+      addr = [letter.recipient.address, letter.recipient.location].filter(Boolean);
+    }
     const rowY = y;
     if (company) {
       setText(DARK);
