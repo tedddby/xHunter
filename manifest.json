@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "xHunter",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Hunt the right job — analyze your CV, tailor it, and write a matching cover letter for any posting with AI.",
   "action": {
     "default_popup": "popup.html",

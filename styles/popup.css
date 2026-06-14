@@ -482,6 +482,47 @@ body {
 .gauge-label {
   margin-top: 4px;
 }
+
+/* Re-score badge — shows the tailored CV's new match score vs. the original */
+.rescore-badge {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 11px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  animation: fadeUp 0.35s var(--ease);
+}
+.rescore-badge.loading {
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.rescore-badge.loading::before {
+  content: '';
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-ring);
+  border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+}
+.rescore-badge.up {
+  background: #edfcf3;
+  border-color: #c3efd6;
+  color: #0a6b3b;
+}
+.rescore-badge.down {
+  background: #fef3f2;
+  border-color: #fcd9d6;
+  color: #b42318;
+}
+.rescore-badge.flat {
+  background: var(--bg);
+  color: var(--muted);
+}
 .report-summary {
   color: var(--text-2);
   text-align: center;

@@ -372,6 +372,64 @@ async function handleTailor({ cv, jd }) {
   }
 }
 
+// Flatten a structured resume (the Stage-2 output) back into plain text so it
+// can be fed to the Stage-1 analyzer for re-scoring.
+function resumeToText(resume) {
+  if (!resume || typeof resume !== 'object') return '';
+  const lines = [];
+  if (resume.name) lines.push(asString(resume.name));
+  if (Array.isArray(resume.contact) && resume.contact.length) {
+    lines.push(resume.contact.join(' | '));
+  }
+  for (const section of resume.sections || []) {
+    lines.push('');
+    if (section && section.title) lines.push(asString(section.title).toUpperCase());
+    for (const e of (section && section.entries) || []) {
+      const head = [e.title, e.title_right].map(asString).filter(Boolean).join(' — ');
+      if (head) lines.push(head);
+      const sub = [e.subtitle, e.subtitle_right].map(asString).filter(Boolean).join(' — ');
+      if (sub) lines.push(sub);
+      if (e.tech) lines.push(asString(e.tech));
+      if (e.text) lines.push(asString(e.text));
+      for (const b of e.bullets || []) lines.push('• ' + asString(b));
+    }
+  }
+  return lines.join('\n').trim();
+}
+
+// Re-runs the Stage-1 match analysis on the *tailored* CV so the popup can show
+// how much the score improved. Deliberately does NOT touch the shared job_status
+// flag — the popup reads the result from the awaited response, so re-scoring can
+// safely overlap with a tailor/cover-letter run. last_rescore is still cached so
+// the score survives the popup being reopened. Fails quietly (enhancement only).
+async function handleRescore({ resume, jd }) {
+  const apiKey = await getApiKey();
+  if (!apiKey) return { ok: false, error: 'NO_KEY' };
+
+  try {
+    const cvText = resumeToText(resume);
+    const content = await callDeepSeek(apiKey, {
+      model: MODEL,
+      temperature: 0.3,
+      max_tokens: 1500,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: STAGE1_SYSTEM },
+        {
+          role: 'user',
+          content: buildUserMessage(jd, cvText, 'Analyze how well my CV matches this job.')
+        }
+      ]
+    });
+
+    const analysis = normalizeAnalysis(parseJSONLoose(content));
+    await storageSet({ last_rescore: analysis }); // cache for popup reopen
+    return { ok: true, rescore: analysis };
+  } catch (e) {
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
+}
+
 async function handleCoverLetter({ cv, jd }) {
   await storageSet({ job_status: 'cover_lettering', last_error: '' });
 
@@ -431,6 +489,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === 'COVER_LETTER') {
     handleCoverLetter(message).then(sendResponse);
+    return true; // async response
+  }
+
+  if (message.type === 'RESCORE') {
+    handleRescore(message).then(sendResponse);
     return true; // async response
   }
 

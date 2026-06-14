@@ -40,6 +40,7 @@
     reportCard: $('reportCard'),
     gaugeArc: $('gaugeArc'),
     scoreNumber: $('scoreNumber'),
+    rescoreBadge: $('rescoreBadge'),
     reportSummary: $('reportSummary'),
     strengthsList: $('strengthsList'),
     gapsList: $('gapsList'),
@@ -60,7 +61,10 @@
     uploadedText: '',
     jobDescription: '',
     tailoredCv: '',
-    coverLetter: ''
+    coverLetter: '',
+    baseScore: 0, // original match score (from the base CV)
+    rescore: null, // tailored CV's new score, once computed
+    rescoring: false // a re-score request is in flight
   };
 
   // ---------- Storage helpers ----------
@@ -356,14 +360,20 @@
       .getPropertyValue('--danger').trim();
   }
 
-  function renderReport(analysis) {
+  // Renders the match report. `rescoreScore` is only passed when restoring a
+  // cached tailored-CV score on load, so the gauge lands on the tailored value
+  // and the badge shows the delta without fighting the base count-up animation.
+  function renderReport(analysis, rescoreScore) {
     clearError();
-    const score = Math.max(0, Math.min(100, Number(analysis.match_score) || 0));
+    const base = Math.max(0, Math.min(100, Number(analysis.match_score) || 0));
+    state.baseScore = base;
+    const hasRescore = typeof rescoreScore === 'number';
+    const shown = hasRescore ? Math.max(0, Math.min(100, rescoreScore)) : base;
 
     // Reset arc to empty so it visibly draws in.
     el.gaugeArc.style.transition = 'none';
     el.gaugeArc.style.strokeDashoffset = String(GAUGE_CIRCUMFERENCE);
-    el.gaugeArc.style.stroke = scoreColor(score);
+    el.gaugeArc.style.stroke = scoreColor(shown);
 
     el.reportSummary.textContent = analysis.summary || '';
 
@@ -377,11 +387,21 @@
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         el.gaugeArc.style.transition = '';
-        const offset = GAUGE_CIRCUMFERENCE * (1 - score / 100);
+        const offset = GAUGE_CIRCUMFERENCE * (1 - shown / 100);
         el.gaugeArc.style.strokeDashoffset = String(offset);
-        animateCount(el.scoreNumber, score, 800);
+        animateCount(el.scoreNumber, shown, 800);
       });
     });
+
+    // Re-score state: show the cached delta, or reset for a fresh analysis.
+    if (hasRescore) {
+      state.rescore = shown;
+      showRescoreBadge(base, shown);
+    } else {
+      state.rescore = null;
+      state.rescoring = false;
+      el.rescoreBadge.classList.add('hidden');
+    }
 
     // A fresh analysis invalidates any previously tailored CV / cover letter.
     state.tailoredCv = '';
@@ -448,17 +468,82 @@
     setTimeout(() => chip.classList.remove('copied'), 700);
   }
 
+  // Counts from the node's current value to `target`. A token guards against an
+  // earlier animation (e.g. the base score) overwriting a newer one (re-score).
+  let countToken = 0;
   function animateCount(node, target, duration) {
+    const myToken = ++countToken;
+    const from = Number(node.textContent) || 0;
     const start = performance.now();
     function tick(now) {
+      if (myToken !== countToken) return; // superseded by a newer count-up
       const t = Math.min(1, (now - start) / duration);
       // ease-out
       const eased = 1 - Math.pow(1 - t, 3);
-      node.textContent = String(Math.round(target * eased));
+      node.textContent = String(Math.round(from + (target - from) * eased));
       if (t < 1) requestAnimationFrame(tick);
       else node.textContent = String(target);
     }
     requestAnimationFrame(tick);
+  }
+
+  // ---------- Re-score (auto-runs after tailoring) ----------
+  function showRescoreLoading() {
+    el.rescoreBadge.classList.remove('hidden', 'up', 'down', 'flat');
+    el.rescoreBadge.classList.add('loading');
+    el.rescoreBadge.textContent = 'Re-checking match…';
+  }
+
+  function showRescoreBadge(base, now) {
+    const delta = now - base;
+    el.rescoreBadge.classList.remove('hidden', 'loading', 'up', 'down', 'flat');
+    if (delta > 0) {
+      el.rescoreBadge.classList.add('up');
+      el.rescoreBadge.textContent = `↑ ${delta} after tailoring (was ${base})`;
+    } else if (delta < 0) {
+      el.rescoreBadge.classList.add('down');
+      el.rescoreBadge.textContent = `↓ ${Math.abs(delta)} after tailoring (was ${base})`;
+    } else {
+      el.rescoreBadge.classList.add('flat');
+      el.rescoreBadge.textContent = `Same score after tailoring (${base})`;
+    }
+  }
+
+  // Animate the gauge from the current score to the tailored CV's new score.
+  function applyRescore(newScore) {
+    const score = Math.max(0, Math.min(100, Number(newScore) || 0));
+    state.rescore = score;
+    el.gaugeArc.style.stroke = scoreColor(score);
+    el.gaugeArc.style.strokeDashoffset = String(GAUGE_CIRCUMFERENCE * (1 - score / 100));
+    animateCount(el.scoreNumber, score, 700);
+    showRescoreBadge(state.baseScore, score);
+  }
+
+  // Kick off a re-score of the tailored CV if we have one and don't yet have a
+  // score. Safe to call repeatedly — it no-ops when already done or in flight.
+  // The result comes back on the awaited response (re-score doesn't use the
+  // shared job_status flag), so it can overlap a tailor/cover-letter run safely.
+  async function maybeRescore() {
+    if (state.rescore != null || state.rescoring) return;
+    if (!state.tailoredCv || !state.jobDescription) return;
+    state.rescoring = true;
+    showRescoreLoading();
+    try {
+      const resp = await chrome.runtime.sendMessage({
+        type: 'RESCORE',
+        resume: state.tailoredCv,
+        jd: state.jobDescription
+      });
+      state.rescoring = false;
+      if (resp && resp.ok && resp.rescore && typeof resp.rescore.match_score !== 'undefined') {
+        applyRescore(resp.rescore.match_score);
+      } else {
+        el.rescoreBadge.classList.add('hidden'); // failed — enhancement only, stay quiet
+      }
+    } catch (_) {
+      state.rescoring = false;
+      el.rescoreBadge.classList.add('hidden');
+    }
   }
 
   // ---------- Tailor flow ----------
@@ -950,7 +1035,7 @@
   async function resetJob() {
     await new Promise((resolve) =>
       chrome.storage.local.remove(
-        ['last_analysis', 'last_tailored_cv', 'last_cover_letter', 'last_job_description'],
+        ['last_analysis', 'last_tailored_cv', 'last_cover_letter', 'last_rescore', 'last_job_description'],
         resolve
       )
     );
@@ -959,8 +1044,12 @@
     state.jobDescription = '';
     state.tailoredCv = '';
     state.coverLetter = '';
+    state.baseScore = 0;
+    state.rescore = null;
+    state.rescoring = false;
 
     el.reportCard.classList.add('hidden');
+    el.rescoreBadge.classList.add('hidden');
     el.tailorBtn.classList.add('hidden');
     el.downloadBtn.classList.add('hidden');
     el.coverBtn.classList.add('hidden');
@@ -1004,6 +1093,7 @@
       state.tailoredCv = changes.last_tailored_cv.newValue;
       showDownload();
       el.downloadBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      maybeRescore(); // auto re-score the freshly tailored CV
     } else if (changes.last_cover_letter && changes.last_cover_letter.newValue) {
       setCoverLoading(false);
       clearError();
@@ -1029,6 +1119,7 @@
       'last_analysis',
       'last_tailored_cv',
       'last_cover_letter',
+      'last_rescore',
       'last_job_description',
       'job_status',
       'last_error'
@@ -1039,7 +1130,12 @@
     if (data.last_job_description) state.jobDescription = data.last_job_description;
 
     // A call may have finished while the popup was closed — re-render cache.
-    if (data.last_analysis) renderReport(data.last_analysis);
+    // Pass any cached re-score so the gauge lands on the tailored value directly.
+    const cachedRescore =
+      data.last_rescore && typeof data.last_rescore.match_score !== 'undefined'
+        ? data.last_rescore.match_score
+        : undefined;
+    if (data.last_analysis) renderReport(data.last_analysis, cachedRescore);
     if (data.last_tailored_cv) {
       state.tailoredCv = data.last_tailored_cv;
       showDownload();
@@ -1060,6 +1156,10 @@
       el.coverBtn.classList.remove('hidden');
       setCoverLoading(true);
     }
+
+    // Tailored CV present but never scored (e.g. popup was closed when tailoring
+    // finished) — kick off the re-score now. No-ops if already done/in flight.
+    maybeRescore();
   }
 
   init();

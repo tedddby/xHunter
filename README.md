@@ -25,6 +25,11 @@ One CV is never enough. Every posting wants different keywords in a different or
   </tr>
 </table>
 
+<p align="center">
+  <img src="Screenshots/2.5.png" alt="After tailoring — the match is re-scored, with download and cover-letter actions" width="430"><br>
+  <sub><b>After tailoring, the CV is re-scored (↑ from 65) — then download it or write a cover letter</b></sub>
+</p>
+
 <table>
   <tr>
     <td align="center" width="50%">
@@ -44,6 +49,7 @@ One CV is never enough. Every posting wants different keywords in a different or
 
 - **Match analysis** — a match score, your strengths, the gaps, and keywords to add (click any keyword to copy it).
 - **One-click tailoring** — rewrites your CV in the posting's language. Facts, dates, and companies stay 100% accurate; nothing is fabricated.
+- **Instant re-score** — right after tailoring, xHunter re-checks the tailored CV against the job and shows how much your match improved (e.g. **65 → 89**), so you can see the rewrite actually moved the needle.
 - **Cover letters** — generates a tailored, one-page cover letter grounded in your real CV, exported as a styled PDF based on the Deedy letter template (centered name, contact line, full-width rule, company/date row, signature). Nothing is invented — unknown details (company name/address) are simply left out.
 - **Professional PDF export** — a clean, ATS-parsable résumé layout (centered header, ruled sections, bullets) generated with jsPDF.
 - **Paste or upload** — paste plain text, or drop a **PDF / DOCX** and it extracts the text for you.
@@ -90,6 +96,7 @@ Get a key at [platform.deepseek.com](https://platform.deepseek.com), click the *
 - `background.js` (service worker) makes the DeepSeek calls and writes results to `chrome.storage.local`; the popup renders off `storage.onChanged` so a single result is shown exactly once, even if the popup was reopened mid-run.
 - **Stage 1** returns the match analysis as JSON; **Stage 2** returns the tailored CV as structured JSON, which the popup renders to PDF with jsPDF (Times, US Letter, 0.5″ margins, ruled section headers) for a classic, ATS-friendly résumé.
 - **Stage 3** returns a structured cover letter as JSON, rendered to a separate PDF (Helvetica, A4) modelled on the Deedy cover-letter template — a centered name (first name in the accent color + surname in dark), a centered contact line, a full-width rule, a company-name/date row, the body paragraphs, and a `Sincerely, / Name` closing. Stages 2 and 3 both reuse the job description scraped in Stage 1.
+- **Re-score** runs Stage 1 again on the tailored CV (flattened back to text) right after tailoring and shows the new score vs. the original. It's delivered on the message response rather than via `job_status`, so it can overlap a cover-letter run without clobbering it; the result is cached in `last_rescore` so it survives a popup reopen.
 - All libraries are bundled in `libs/` — **no CDN calls at runtime** (Chrome blocks them for extensions anyway).
 
 ## Project structure
